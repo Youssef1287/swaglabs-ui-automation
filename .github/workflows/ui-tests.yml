@@ -1,0 +1,69 @@
+name: UI tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+    inputs:
+      record_video:
+        description: 'Record videos of failed tests (browser runs visibly; Linux uses Xvfb and ffmpeg)'
+        type: boolean
+        default: false
+
+jobs:
+  regression:
+    name: Standard user - ${{ matrix.browser }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            browser: chrome
+          - os: windows-latest
+            browser: edge
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Install Xvfb and ffmpeg (video recording on Linux)
+        if: ${{ inputs.record_video && runner.os == 'Linux' }}
+        run: sudo apt-get update && sudo apt-get install -y xvfb ffmpeg
+
+      - name: Run standard-user regression tests
+        shell: bash
+        env:
+          RECORD_VIDEO: ${{ inputs.record_video }}
+        run: |
+          ARGS="-B -ntp clean test -Dbrowser=${{ matrix.browser }}"
+          if [ "$RECORD_VIDEO" = "true" ]; then
+            # The recorder films the desktop, so the browser must be visible (not headless).
+            ARGS="$ARGS -Drecord.video=true -Dheadless=false"
+            if [ "$RUNNER_OS" = "Linux" ]; then
+              xvfb-run -a --server-args="-screen 0 1920x1080x24" mvn $ARGS
+              exit $?
+            fi
+          else
+            ARGS="$ARGS -Dheadless=true"
+          fi
+          mvn $ARGS
+
+      - name: Upload standard-user results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-standard-${{ matrix.browser }}
+          path: |
+            target/allure-results
+            target/surefire-reports
+            target/logs
